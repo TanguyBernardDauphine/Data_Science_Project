@@ -645,4 +645,4 @@ In light of our regression analyses and clustering methodology, we have gained a
 
 # References
 
-- 
+All quotes from this study come from Loïc Henry course on panel data econometrics.

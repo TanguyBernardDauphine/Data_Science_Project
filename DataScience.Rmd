@@ -1,0 +1,523 @@
+---
+title: "Study of Birth rate"
+subtitle: "Data Science for Peace Studies"
+author: "Tanguy Bernard Marceau Romano Baptiste Lemaître Clara Yazi"
+date: "2024-03-10"
+output: 
+  html_document:
+    css: style.css
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+Our data science project delves into a pivotal question: what are the determinants of the global birth rate? To address this question comprehensively, we choosed to  adopt a dual methodology, combining linear regression with clustering methods. 
+
+The rationale behind our focus on this specific issue arises from the growing imperative to understand demographic shifts, particularly the declining birth rates in developed countries and their persistence at higher levels in developing nations. To navigate this complexity, we carefully selected five key indicators from the World Bank database: Female labor force participation, Percentage of the total population in rural areas, GDP per capita, Child mortality, and Percentage of the population undernourished. These indicators, spanning economic, social, and healthcare dimensions, collectively contribute to the intricate landscape of birth rates worldwide which is our dependent variable .
+
+While linear regression helps quantify the individual impact of each variable on birth rate, we complement our approach with clustering methods to gain a more comprehensive perspective. Clustering enables us to identify patterns and relationships among countries based on their unique combinations of demographic determinants. This method enriches our understanding by exploring the interactions and interdependencies between variables within distinct groups, providing a more holistic view of the dynamics influencing global birth rates.
+
+By meticulously analyzing data from over 100 countries, our ultimate goal is to construct a robust model that not only quantifies the impact of each variable but also uncovers subtle interactions and patterns within clusters.
+We will study the data available for our variables, starting in 1960 to 2021. We hope to sharpen our analysis by using as much data as possible. 
+By using both linear regression and clustering methods in a systematic way, we hope to gain a better understanding of global demographic dynamics.
+
+# Study preparation
+
+Before any analysis we must first prepare our working environment in `RStudio`. To do this we clean our environment using the `rm(list=ls())` function and we assign the path to the working directory with `setwd()`function.
+
+```{r message=FALSE, warning=FALSE}
+rm(list=ls())
+setwd(dir="/Users/Thierry/Documents/Projet R")
+```
+
+Then we call all the packages (using the `library()` function) that we need for our study. We of course downloaded all the packages using the `install.packages()` function.
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(wbstats)
+library(plm)
+library(plotly)
+library(ggplot2)
+library(ggthemes)
+```
+
+
+
+# Variables 
+
+Variables description with our hypothesis: 
+
+## Dependent Variable:
+Birth Rate: The number of births per 1,000 people.
+
+
+## Independent Variables:
+- Female labor force participation rate  : it measures the percentage of working-age women (usually 15-64 years old) who are either employed or actively seeking employment in the formal labor market. The data is typically obtained from national labor force surveys or censuses. We make the assumption that with more women working, the childbirth rate should be lower.. This assumption aligns with observations in Japan, where higher female workforce engagement is considered a factor contributing to the declining population.
+
+
+- Percentage of the total population living in rural areas : This variable represents the proportion of a country's entire population residing in rural areas, as reported in World Bank data.We hypothesize that the percentage of the total population living in rural areas may influence childbirth rates. Initially, the assumption suggests a positive correlation, positing that residing in rural areas might positively impact childbirth rates due to the availability of more hands for agricultural activities. However, we acknowledge that this assumption may primarily hold true in developing  countries.  Our investigation aims to discern if a disparity exists between wealthy and impoverished nations concerning the relationship between rural residence and childbirth rates. By exploring these nuances, we seek to contribute to a more nuanced understanding of how urban-rural dynamics may vary in influencing childbirth rates across different economic contexts.
+
+- GDP per capita : This variable represents the Gross Domestic Product (GDP) per capita, measured in current US dollars.
+
+- Child mortality : This indicator gauges the number of deaths among children under the age of five per 1,000 live births in a given population.We make the assumption that in regions with higher child mortality, there could be an inclination towards increased childbirth, particularly in economically challenged countries. However, conversely, it is plausible that a high child mortality rate may act as a deterrent, potentially dissuading households from expanding their family size.
+
+- Prevalence of food undernourishment (percentage) : For this last variable we make the assumption that communities facing undernourishment are more likely to have fewer children due to limited food resources. However, it is noteworthy that impoverished nations typically exhibit higher childbirth rates, aligning with the observation that such countries often report the highest percentages of undernourished populations. Our analysis aims to discern the veracity of these assumptions, exploring the intricate relationship between food undernourishment, economic factors, and childbirth rates.
+
+
+
+# Tidyness : 
+
+We create the `wb_db_treatment` function, which imports the data using the World Bank API. To do this we use the wb_data function from the wbstats package. The  argument `country=countryies_only` is used to select all countries. We also specify the argument : `return_wide = FALSE` to keep the data in tidy format. Finally, we use the select function to select the iso3c country codes, the names of the countries, the value of the indicator and the dates for which these values are observed (`select(iso3c,country,value,date)`).
+
+
+```{r message=FALSE, warning=FALSE}
+wb_db_treatment <- function(key){
+  db <- wb_data(indicator=key,
+                country="countries_only",
+                return_wide = FALSE,
+                date_as_class_date = FALSE) %>%
+    select(iso3c,country,value,date)
+  return(db)
+}
+```
+
+We will now import the data for the various variables in our study:
+- the crude birth rate (per 1000 people) : `SP.DYN.CBRT.IN`
+- GDP per capita (in USD) : `NY.GDP.PCAP.CD`
+- Infant mortality rate (per 1000 people) : `SH.DYN.MORT`
+- Female labour force participation rate : `SL.TLF.CACT.FE.ZS`
+- Prevalence of food undernourishment (in %) : `SN.ITK.DEFC.ZS`
+
+```{r message=FALSE, warning=FALSE}
+brth_r <- wb_db_treatment("SP.DYN.CBRT.IN")
+c_mrtlty <- wb_db_treatment("SH.DYN.MORT")
+lnd_popu <- wb_db_treatment("SP.RUR.TOTL.ZS")
+gdp_cap <- wb_db_treatment("NY.GDP.PCAP.CD")
+lab_frc <- wb_db_treatment("SL.TLF.CACT.FE.ZS")
+under_nrshmnt <- wb_db_treatment("SN.ITK.DEFC.ZS")
+```
+
+We now create the `svrl_inner_join()` function, which performs an inner_join but with more than 2 `data.frames`.
+The `inner_join()` function can only perform the merge operation between 2 `data.frames`.
+This function takes as arguments :
+- the `rowname` vector which holds the variable names,
+- the `key` flag, which will be used as the by argument for the `inner_join function()`,
+- the set of `data.frames` you want with the argument `...`.
+
+```{r message=FALSE, warning=FALSE}
+svrl_inner_join <- function(rowname,key,...) {
+  var <- list(...)
+  db<-data.frame(rowname)
+  for(i in var) {
+    db<-inner_join(db,as.data.frame(i),by=key) 
+  }
+  return(db)
+}
+```
+
+We execute this function `svrl_inner_join()` which will take as arguments :
+- a rowname vector containing the name of the country, the iso3c code of the country and the date of the observation for each observation,
+- the merge keys containing iso3c, country and dates,
+- all the `data.frames` of our variables (the dependent variable and the independent variables).
+
+```{r message=FALSE, warning=FALSE}
+rowname <- brth_r[,c(1,2,4)]
+db<- svrl_inner_join(rowname,key=c("iso3c","country","date"),
+                        brth_r,
+                        c_mrtlty,
+                        lnd_popu,
+                        gdp_cap,
+                        lab_frc,
+                        under_nrshmnt)
+```
+
+
+We have just created our study database and now we are reassigning all the variable names.
+
+```{r message=FALSE, warning=FALSE}
+colnames(db) <- c("iso3c","country","year","brth_r","c_mrtlty","lnd_popu","gdp_cap","lab_frc","under_nrshmnt")
+```
+
+We then delete all the `data.frames` we imported using the wb_db_treatment function we created earlier. This allows us to make sure that we don't confuse our variables.
+
+```{r message=FALSE, warning=FALSE}
+rm(c_mrtlty,lnd_popu,brth_r,gdp_cap,lab_frc,under_nrshmnt)
+```
+
+We delete all the lines in our `data.frame` for which we are missing an observation for one of the variables.
+
+```{r message=FALSE, warning=FALSE}
+db <- drop_na(db)
+```
+
+We create a `data.frame` region using the `wb_countries()` function in the `wbstats` package. The `wb_countries()` function obtains a data.frame with information for each country, including their regions. 
+Then from this `data.frame` region we retain only the country and region variables. Finally, we merge the db and region `data.frames`, keeping only the db variables and adding the region variable with by argument : regions.
+
+```{r message=FALSE, warning=FALSE}
+region <- wb_countries(lang="en")
+region <- region[,c(1,9)]
+db <- merge(db, region, all.x=TRUE)
+```
+
+We then convert the region variable in the data.frame db into an object of type factor.
+
+```{r}
+db$region <- as.factor(db$region)
+```
+
+We therefore have our final database in tidy format. This means that each column represents a variable and each observation represents a variable.
+
+#Analysis
+
+We are now proceeding with the analysis of our database, which will consist of two steps:
+- 1st step: we study the impact of each exogenous variable separately on the endogenous variable. This will greatly help us in the rest of our analysis.
+- 2nd step: we carry out a linear regression of our dependent variable (the birth rate) according to our explanatory variables (GDP per capita, female labor force participation, the prevalence of undernutrition, the share of the rural population and infant mortality rate).
+- 3rd step: we carry out data classification using the centroid cluster method.
+
+## Seperate analysis 
+
+We study the impact of each exogenous variable separately on the endogenous variable. This will greatly help us in the rest of our analysis.
+To do this, we will carry out a graphical study by drawing a cloud of points each time using the `plotly` and `ggplot2` packages.
+
+### GDP per capita
+
+We execute the following lines of code to get the birth rate depending on the GDP per capita.
+
+```{r message=FALSE, warning=FALSE}
+plot1 <- ggplot(db, aes(x = gdp_cap, y = brth_r)) + 
+  geom_point(aes(color=factor(region),frame=year)) +
+  xlab(label="GDP per capita") +
+  ylab(label="Birth rate ‰") +
+  labs(title="Birth rate depending on GDP per capita") +
+  theme(plot.title=element_text(face="bold",size=15,hjust=0.5))
+ggplotly(plot1)
+```
+
+
+### Child mortality rate 
+
+We execute the following lines of code to get the graph of birth rate depending on the child mortality rate.
+
+```{r message=FALSE, warning=FALSE}
+plot2 <- ggplot(db, aes(x = c_mrtlty, y = brth_r)) + 
+  geom_point(aes(color=factor(region),frame=year)) +
+  xlab(label="Child mortality ‰") +
+  ylab(label="Birth rate ‰") +
+  labs(title="Birth rate depending on child mortality") +
+  theme(plot.title=element_text(face="bold",size=15,hjust=0.5))
+ggplotly(plot2)
+```
+
+
+This second graph illustrates a positive linear relationship between the birth rate and child mortality, as the child mortality rate increases, there is a simultaneous rise in the birth rate. This trend indicates that in areas with higher child mortality, individuals tend to have more children, potentially as a coping strategy to offset the heightened risk of child mortality and ensure that some of their children reach adulthood. This finding underscores a distinct contrast between economically advanced nations, marked by lower child mortality and, consequently, lower birth rates, and economically less developed nations where higher child mortality is linked to elevated birth rates.
+
+### Female labour force participation
+
+We execute the following lines of code to get the graph of birth rate depending on female labour force participation.
+
+```{r message=FALSE, warning=FALSE}
+plot3 <- ggplot(db, aes(x = lab_frc, y = brth_r)) + 
+  geom_point(aes(color=factor(region),frame=year)) +
+  xlab(label="Female labour force participation %") +
+  ylab(label="Birth rate ‰") +
+  labs(title="Birth rate depending on female labour force") +
+  theme(plot.title=element_text(face="bold",size=15,hjust=0.5))
+ggplotly(plot3)
+```
+
+
+This third graph depicts the relationship between the birth rate and female labor force participation. Surprisingly, there are no clear and evident correlations observed between the percentage of women in the workforce and the birth rate. We will see if the linear regression shows a clearer result. 
+
+### Percentage of rural population
+
+We execute the following lines of code to get the graph of birth rate dependiing on rural population.
+
+```{r message=FALSE, warning=FALSE}
+plot4 <- ggplot(db, aes(x = lnd_popu, y = brth_r)) + 
+  geom_point(aes(color=factor(region),frame=year)) +
+  xlab(label="Rural population %") +
+  ylab(label="Birth rate ‰") +
+  labs(title="Birth rate depending on rural population") +
+  theme(plot.title=element_text(face="bold",size=15,hjust=0.5))
+ggplotly(plot4)
+```
+
+
+The fourth graph, representing the relationship between the birth rate and the percentage of the population living in rural areas, unveils a positive and ascending correlation. This suggests that as the rural population percentage increases, so does the birth rate. This pattern is particularly evident in economically less developed countries characterized by a predominantly rural population. The plausible explanation for this trend lies in the higher demand for manual labor associated with agricultural activities prevalent in rural areas. Families in these regions may opt for larger family sizes to meet the demand for labor, contributing to the observed positive relationship. Additionally, cultural factors intertwined with traditional agrarian lifestyles could further reinforce the inclination towards larger families in rural settings.
+
+
+### Prevalence of food undernourishment
+
+```{r message=FALSE, warning=FALSE}
+plot5 <- ggplot(db, aes(x = under_nrshmnt, y = brth_r)) + 
+  geom_point(aes(color=factor(region),frame=year)) +
+  xlab(label="Under nourishment ‰") +
+  ylab(label="Birth rate ‰") +
+  labs(title="Birth rate depending on under nourishment") +
+  theme(plot.title=element_text(face="bold",size=15,hjust=0.5))
+ggplotly(plot5)
+```
+
+
+The fifth graph illustrates a positive and increasing correlation between the birth rate and the prevalence of undernourishment, as the rate of undernourishment rises, there is a corresponding elevation in the birth rate.The underlying assumption driving the observed correlation between undernourishment and birth rate is rooted in the critical demand for a labor force in regions grappling with heightened levels of malnutrition. As discussed earlier, families in these areas may strategically opt for larger family sizes in response to this imperative need. This strategic decision-making process is likely influenced by various factors, including the aspiration to enhance production, secure additional income, or ensure a sufficient food supply to combat undernourishment. However, it's crucial to note the paradoxical aspect: as the number of children increases, so does the number of mouths to feed. Consequently, interpreting the graph requires caution and acknowledgment of the intricate dynamics at play. To gain a more nuanced understanding of this complex relationship, a linear regression analysis may provide clearer insights, offering a deeper exploration of the intricate interplay between undernourishment and its impact on birth rates.
+
+
+## Clustering  
+
+We shall use the K-means clustering, which is an algorithm used for partitioning a dataset into K distinct, non-overlapping clusters. The algorithm iteratively assigns data points to the nearest cluster centroid and recalculates the centroids based on the mean of the points in each cluster. This process continues until the centroids no longer change significantly or a specified number of iterations is reached. K-means clustering aims to minimize the sum of squared distances between data points and their respective cluster centroids, effectively grouping similar data points together.
+
+We are now proceeding to a cluster analysis in order to classify the countries. We are using the k-means method to determine the clusters.
+Before using the k-means method we need to know what is the optimum k (number of clusters) to our clustering. To find the optimum k we use the elbow method by using the following code. 
+
+```{r}
+set.seed(4)
+```
+
+We use the function `set.seed()` to get always the same results on our analysis since the k.means method is based on randomness.
+
+
+```{r}
+k_max <- 10
+wss <- sapply(1:k_max, 
+              function(k){kmeans(db[,4:9], k, nstart=50 )$tot.withinss}
+              )
+```
+
+We have set `k_max` to 10 which the maximum number of clusters to considerate. We haven't set it higher as it uses a lot of RAM on our computer.
+Then we have created the `sapply` function `wss()`(which stands for within cluster sum of squares). A sapply function go through all the observations of a vector or data.frame and applies a function to it. So function iterates from 1 to k-max (which is 10) and computes the total within cluster sum of squares for each.
+
+
+```{r}
+wss
+```
+
+```{r}
+plot(1:k_max, wss,
+     type="b", pch = 19, frame = FALSE, 
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares")
+```
+
+From this graph we can see that the optimal number of clusters is 6 because beyond 6 clusters it does not minimize the sum of squares within the clusters much further. Therefore we set k to 6.
+
+```{r}
+k=6
+db_kmeans<- kmeans(db[,4:9],k)
+```
+
+
+
+
+Centroids and clusters
+We use the command “db_kmeans$centers” to get our centroids precise positions.
+
+```{r}
+db_kmeans$centers
+db$kmCluster<- db_kmeans$cluster
+```
+
+
+1.Birthrate and Child mortality
+
+We notice that the sub-saharan african countries are gathered on higher levels of birth rate and child mortality, alongside some south and east asian countries. The centroid of this cluster is far from the other centroids of the other clusters, marking a stark difference regarding this variable between sub-saharan african countries and the rest of the world, especially europe and central asia alongside latin america and the caribbeans.
+
+```{r}
+plot <- ggplot(db, aes(c_mrtlty, brth_r)) +
+  geom_point(aes( alpha=0.6,shape=as.factor(kmCluster),color=region))+
+  geom_point(aes(x=17.606442, y=16.62197, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=59.563947, y=28.64267, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=6.982650, y=12.27998, colour="goldenrod4", size =3),frame=year)+
+  geom_point(aes(x=3.293478, y=11.03913, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=4.312973, y=11.77850, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=5.010084, y=11.73353, colour="goldenrod4", size =3),frame=year)
+ggplotly(plot)
+```
+
+2.Birth Rate and percentage of rural population
+
+The distribution of observations here is more widespread. Still, we can notice that the sub-saharan african countries globally have a higher rural population percentage, which goes hand in hand with the birth rate. Moreover, we can see many observations from south asian countries with high rural percentages and child birth rates close to the african ones. However, we can see the large heterogeneity among the south asian countries , with many having low birth rates with high rural population percentages.
+
+```{r}
+plot <- ggplot(db, aes(lnd_popu, brth_r)) +
+  geom_point(aes( alpha=0.6,shape=as.factor(kmCluster),color=region))+
+  geom_point(aes(x=33.82505, y=16.62197, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=56.52121, y=28.64267, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=28.48515, y=12.27998, colour="goldenrod4", size =3),frame=year)+
+  geom_point(aes(x=19.34252, y=11.03913, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=17.91738, y=11.77850, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=17.53786, y=11.73353, colour="goldenrod4", size =3),frame=year)
+ggplotly(plot)
+```
+
+3.Birth Rate and gdp per capita
+
+In this graph, we find part of the situation with the previous graph on rural population. The sub-saharan african countries and the south asian countries both have low gdp per capita with high birth rates, although the south asian countries have a slightly lower birth rate than the african ones. More interestingly, the middle east and north african countries are very heterogenous, with some being part of a cluster with low gdp per capita and a moderate birth rate, and some being part of another cluster with higher gdp, but with roughly similar birth rates. Unsurprisingly, the cluster with the highest gdp per capita and the lowest birth rate is only comprised of european and central asian countries, such as China or Germany.
+
+
+```{r}
+plot <- ggplot(db, aes(gdp_cap, brth_r)) +
+  geom_point(aes( alpha=0.6,shape=as.factor(kmCluster),color=region))+
+  geom_point(aes(x=8475.309, y=16.62197, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=1882.380, y=28.64267, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=20467.543, y=12.27998, colour="goldenrod4", size =3),frame=year)+
+  geom_point(aes(x=96371.793, y=11.03913, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=54487.593, y=11.77850, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=37971.251, y=11.73353, colour="goldenrod4", size =3),frame=year)
+ggplotly(plot)
+```
+
+4.Birthrate and female labor force
+
+On this graph, we again notice some interesting gatherings. The sub-saharan african countries and the south asian countries have high birth rates, but also varying percentages of women's participation in the labour market. Although the centroids of all clusters have a very similar female participation in the labor market, the sub-saharan african countries group is the one with the most extreme female participation percentages, reaching  80% for some of them. This could probably be explained by the fact that these women often have to work to sustain their larger families. 
+
+This may however come as a surprise as this variable applies to formal work, which is rarer in sub-saharan african countries. One possible explanation would be that these women often work in agriculture, even outnumbering men in this sector. (in Mali, they represent 71% of the workforce in agriculture). The question of this work being formal remains though.
+
+
+```{r}
+plot <- ggplot(db, aes(lab_frc, brth_r)) +
+  geom_point(aes( alpha=0.6,shape=as.factor(kmCluster),color=region))+
+  geom_point(aes(x=46.89764, y=16.62197, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=50.07183, y=28.64267, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=48.73321, y=12.27998, colour="goldenrod4", size =3),frame=year)+
+  geom_point(aes(x=57.36876, y=11.03913, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=58.19492, y=11.77850, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=52.78017, y=11.73353, colour="goldenrod4", size =3),frame=year)
+ggplotly(plot)
+```
+
+
+5.Birthrate and undernourishment
+
+On this last graph, almost all our centroids are gathered in the bottom left part of the graph, with a percentage of the population undernourished close to zero and a low child mortality. Once again, the only cluster with a higher child mortality combined with a larger portion of the population being undernourished is composed mainly of sub-saharan african countries, alongside latin america and south asian countries. The centroid’s position of this cluster is very distinct from the others, confirming once again the special situation of the sub-saharan african countries in our birth rate study.
+
+
+```{r}
+plot <- ggplot(db, aes(under_nrshmnt, brth_r)) +
+  geom_point(aes( alpha=0.6,shape=as.factor(kmCluster),color=region))+
+  geom_point(aes(x=5.574963, y=16.62197, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=16.867684, y=28.64267, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=3.462461, y=12.27998, colour="goldenrod4", size =3),frame=year)+
+  geom_point(aes(x=2.500000, y=11.03913, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=2.519459, y=11.77850, colour="goldenrod4",  size =3),frame=year)+
+  geom_point(aes(x=2.810504, y=11.73353, colour="goldenrod4", size =3),frame=year)
+ggplotly(plot)
+```
+
+
+## Linear regression 
+
+
+Before we proceed our linear regression on our model we have to know which specification is most appropriate for our panel data model. For this we will use the Hsiao test sequence. The goal is to determine if our panel data model is a heterogeneous model in other words the coefficients of our linear regression will be indexed on individuals and on time; or if our panel data model is a homogeneous model in other words the coefficients of our linear regression will be constant over time and for individuals.
+The Hsiao test sequence consists of three steps.
+
+Since we have panel data we will use the `plm` packages in order to to the linear regressions.
+
+### Hsiao test sequence
+
+#### First Step
+
+We proceed with a Hausman to know if our model is a fixed-effect one or a random-effect one :
+- "A fixed effect model is synonymous with an arbitrary correlation between the unobserved effects αi and the explanatory variables".
+- "A random effect model is synonymous with the absence of correlation between the observed explanatory variables and the unobserved individual effect".
+
+```{r message=TRUE, warning=FALSE}
+model_f <- plm(data=db,formula=brth_r~c_mrtlty+lnd_popu+gdp_cap+lab_frc+under_nrshmnt,model="within",effect="twoways")  #free model or non-contraint model
+model_r <- plm(data=db,formula=brth_r~c_mrtlty+lnd_popu+gdp_cap+lab_frc+under_nrshmnt,model="random")  #contraint model
+phtest(model_f,model_r)
+```
+
+According to the `phtest()` function the $p_value$ is lower than $0.05$, therefore we can conclude that our data panel model is fixed-effect one.
+
+This information is useful to execute the next lines of code.
+
+“We first test the homogeneity of all the parameters. If we don't reject the null hypothesis, we stop there and accept the idea that our model is homogeneous.”
+Therefore we compare the two following models :
+- $brth\_r_{i,t}=\alpha_{i}+\beta_{i,t}gdp_{i}+\gamma_{i,t}c\_mrtlty_{i}+\delta_{i,t}rur\_pop_{i}+\zeta_{i,t}under\_nrhsmnt_{i}+\eta_{i,t}f\_lab\_frc_{i}+\varepsilon_{i,t}$, (unconstrained model or non-constrained model)
+- $brth\_r_{i,t}=\alpha+\beta gdp_{i}+\gamma c\_mrtlty_{i}+\delta rur\_pop_{i}+\zeta under\_nrhsmnt_{i}+\eta f\_lab\_frc_{i}+\varepsilon_{i,t}$ (constrained model)
+
+To compare our two model we proceed with a Fisher test of restriction on the coefficients.
+
+```{r message=TRUE, warning=FALSE}
+model_nc <- plm(data=db,formula=brth_r~c_mrtlty+lnd_popu+gdp_cap+lab_frc+under_nrshmnt,model="within",effect = "twoways")
+model_c <- plm(data=db,formula=brth_r~c_mrtlty+lnd_popu+gdp_cap+lab_frc+under_nrshmnt,model="pooling")
+summary(model_c)
+summary(model_nc)
+```
+
+We have used the function summary to get the informations about our regressions on the following models, and therefore to compute the statistic of the test.
+We can also get the following statistic test by using the function pFtest().
+
+```{r}
+pFtest(model_nc,model_c)
+```
+
+
+According to the `pFtest()` function the $p_value$ is lower than $0.05$, therefore we can conclude that our data panel model is not pooling model. So it means that there is may be unobserved individual effects and heterogenous slopes.
+
+
+#### Second step
+
+“We then test the homogeneity of the slopes in order to know if we don't reject the null hypothesis, we stop there and accept the idea that our model is a model with only heterogeneous slopes.”
+Therefore we compare the two following models :
+- $brth\_r_{i,t}=\alpha_{i}+\beta_{i,t}gdp_{i}+\gamma_{i,t}c\_mrtlty_{i}+\delta_{i,t}rur\_pop_{i}+\zeta_{i,t}under\_nrhsmnt_{i}+\eta_{i,t}f\_lab\_frc_{i}+\varepsilon_{i,t}$, (unconstrained model or non-constrained model)
+- $brth\_r_{i,t}=\alpha_{i}+\beta gdp_{i}+\gamma c\_mrtlty_{i}+\delta rur\_pop_{i}+\zeta under\_nrhsmnt_{i}+\eta f\_lab\_frc_{i}+\varepsilon_{i,t}$ (constrained model)
+
+
+To compare our two model we proceed with a Fisher test of restriction on the coefficients.
+
+```{r}
+model_c <- plm(data=db,formula=brth_r~c_mrtlty+lnd_popu+gdp_cap+lab_frc+under_nrshmnt,model="within",effect="time")
+model_nc <- plm(data=db,formula=brth_r~c_mrtlty+lnd_popu+gdp_cap+lab_frc+under_nrshmnt,model="within",effect="twoways")
+summary(model_c)
+summary(model_nc)
+pFtest(model_nc,model_c)
+```
+
+According to the `pFtest()` function the $p_value$ is lower than $0.05$, therefore we can conclude that our data panel model is not pooling model. So it means that the model is not with heterogenous slopes only.
+
+#### Third step
+
+“We then test the homogeneity of the constants. If non-rejection, then the model is homogeneous on all parameters. If we don't reject the null hypothesis, then the model accepts unobserved individual effects (heterogeneous constants).”
+
+Therefore we compare the two following models :
+- $brth\_r_{i,t}=\alpha_{i}+\beta_{i,t}gdp_{i}+\gamma_{i,t}c\_mrtlty_{i}+\delta_{i,t}rur\_pop_{i}+\zeta_{i,t}under\_nrhsmnt_{i}+\eta_{i,t}f\_lab\_frc_{i}+\varepsilon_{i,t}$, (unconstrained model or non-constrained model)
+- $brth\_r_{i,t}=\alpha+\beta_{i,t} gdp_{i}+\gamma_{i,t} c\_mrtlty_{i}+\delta_{i,t} rur\_pop_{i}+\zeta_{i,t} under\_nrhsmnt_{i}+\eta_{i,t} f\_lab\_frc_{i}+\varepsilon_{i,t}$ (constrained model)
+
+
+To compare our two model we proceed with a Fisher test of restriction on the coefficients.
+
+```{r}
+model_nc <- plm(data=db,formula=brth_r~c_mrtlty+lnd_popu+gdp_cap+lab_frc+under_nrshmnt,model="within",effect="individual")
+model_c <- plm(data=db,formula=brth_r~c_mrtlty+lnd_popu+gdp_cap+lab_frc+under_nrshmnt,model="pooling")
+summary(model_c)
+summary(model_nc)
+pFtest(model_nc,model_c)
+```
+
+According to the `pFtest()` function the $p_value$ is lower than $0.05$, therefore we can conclude that our data panel model is a data panel model with heterogenous slopes and unobserved individuals effects.
+
+### Linear regression
+
+For this second part, we chose to carry out a linear regression taking into account the heterogenous effects previously determined. Logistic regression was deemed unsuitable given the nature of our dependent variable, which does not possess a binary or multinomial structure.
+
+To do a linear regression on a panel data model we use the function `plm()` of the packages `plm` which is specifically designed for panel data. In fact the standard `lm()`function doesn't work for panel data because our variables are not only indexed according to time (years) but also according to the individuals observed (country).
+
+```{r}
+model <- plm(data=db,formula=brth_r~c_mrtlty+lnd_popu+gdp_cap+lab_frc+under_nrshmnt,model="within",effect="twoways")
+summary(model)
+```
+
+The positive and significant coefficient for child mortality (8,6730e-02) implies that regions grappling with higher child mortality tend to experience elevated birth rates, aligning with our initial expectations. The coefficient for population undernourished (-2,2610e-02) is negative and significant corroborating with our assumption that regions experiencing higher levels of undernourishment tend to have lower birth rates, highlighting the intricate relationship between nutrition and demographic patterns.
+The percentage of the population living in rural areas (2,0449e-01) is also a positive and significant coefficient, corroborating  our previous assumption.
+For GDP per capita (pibhab), we note a positive and significant coefficient (1.3075e-05). However, considering the p-values of other variables and adhering to a 1% significance threshold, we cautiously deem it non-significant. 
+The highly significant and negative coefficient (-7.6433e-02) for female labor force participation suggests an inverse relationship with birth rates. In other words, regions with higher female labor force participation tend to experience lower birth rates. This finding may be attributed to factors such as increased education and career opportunities for women, which can influence family planning choices and contribute to a decline in birth rates. This negative correlation aligns with the evolving social dynamics and changing roles of women in the workforce, influencing demographic patterns globally.
+An overview of the significance of our model reveals a noteworthy multiple R-squared value of 0.50081, suggesting that approximately 50.081% of the variability in the birth rate can be attributed to the included variables.  
+
+
+# Conclusion
+
+In light of our regression analyses and clustering methodology, we have gained a more comprehensive understanding of child birth rates, revealing substantial heterogeneity across different regions. The visual representations provided through our graphic approach have effectively validated some of our initial hypotheses. The relationship between birth rates and key development indicators becomes evident: lower GDP, a larger rural population, and consequently, a generally poorer economic condition positively influence birth rates.This pattern is notably pronounced in the African continent, particularly sub-Saharan Africa, where higher birth rates align with the identified indicators. Despite these valuable insights, it is crucial to acknowledge the imperfections in our model. We recognize the omission of crucial variables, such as the political situations of the countries under analysis, which could potentially exert significant influence on individuals' willingness to have more children. Thus, our study lays the foundation for a more nuanced understanding of the intricate interplay between socio-economic factors and demographic patterns, while also highlighting the need for further exploration into additional variables to refine our model.
